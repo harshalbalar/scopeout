@@ -1,12 +1,14 @@
 """
-ScopeOut — Graph Nodes (Phase 2)
+ScopeOut — Graph Nodes (Phase 3)
 =================================
-Three nodes forming a linear pipeline:
-  planner  →  researcher  →  synthesizer
+Phase 3 upgrade: the single sequential researcher is replaced by
+parallel research workers using LangGraph's Send() API.
 
-Phase 2 upgrade: the researcher now uses Tavily web search
-to ground findings in real, current, sourced data instead of
-relying on the LLM's training memory.
+  planner → [worker, worker, worker, worker] → synthesizer
+
+Each worker handles one research angle independently. They all run
+at the same time and their findings merge via the operator.add
+reducer on the state's findings list.
 """
 
 from __future__ import annotations
@@ -81,41 +83,48 @@ Respond with ONLY a JSON array of 4 objects. No other text, no markdown fences."
     return {"angles": angles}
 
 
-def researcher(state: ScopeOutState) -> dict:
+def research_worker(state: dict) -> dict:
     """
-    Investigate each research angle using Tavily web search + Gemini analysis.
+    Research a SINGLE angle using Tavily web search + Gemini analysis.
 
-    Phase 2: for each angle, search the web for current data, then ask
-    Gemini to analyze the search results. Falls back to LLM knowledge
-    if Tavily returns no results for an angle.
+    This node is instantiated in parallel by the Send() API — one
+    instance per research angle, all running at the same time.
+
+    Receives from Send():
+        {"company": str, "angle": ResearchAngle}
+
+    Returns:
+        {"findings": [ResearchFinding]}
+        The operator.add reducer merges findings from all workers.
     """
     company = state["company"]
-    angles = state["angles"]
-    findings: list[ResearchFinding] = []
+    angle = state["angle"]
 
-    for angle in angles:
+    # Handle case where Send() serialized the Pydantic model to a dict
+    if isinstance(angle, dict):
+        angle = ResearchAngle(**angle)
 
-        # ── Step 1: Search the web via Tavily ───────────────
-        query = f"{company} {angle.topic}"
-        print(f"[researcher] Searching: '{query}'")
+    # ── Step 1: Search the web via Tavily ───────────────
+    query = f"{company} {angle.topic}"
+    print(f"[worker:{angle.topic}] Searching: '{query}'")
 
-        search_response = tavily_client.search(
-            query=query,
-            max_results=5,
-            search_depth="advanced",
+    search_response = tavily_client.search(
+        query=query,
+        max_results=5,
+        search_depth="advanced",
+    )
+
+    results = search_response.get("results", [])
+
+    # ── Step 2: Build context and analyze ───────────────
+    if results:
+        context = "\n\n".join(
+            f"[Source: {r['url']}]\nTitle: {r.get('title', 'N/A')}\n{r.get('content', '')}"
+            for r in results
         )
+        sources = [r["url"] for r in results]
 
-        results = search_response.get("results", [])
-
-        # ── Step 2: Build context and analyze ───────────────
-        if results:
-            context = "\n\n".join(
-                f"[Source: {r['url']}]\nTitle: {r.get('title', 'N/A')}\n{r.get('content', '')}"
-                for r in results
-            )
-            sources = [r["url"] for r in results]
-
-            prompt = f"""You are a competitive intelligence researcher analyzing "{company}".
+        prompt = f"""You are a competitive intelligence researcher analyzing "{company}".
 
 Research angle: {angle.topic}
 Question: {angle.question}
@@ -130,12 +139,12 @@ SEARCH RESULTS:
 
 Provide a detailed, well-structured analysis in under 400 words."""
 
-        else:
-            # Fallback: no search results — use LLM knowledge
-            print(f"[researcher] No search results for '{query}', falling back to LLM knowledge")
-            sources = []
+    else:
+        # Fallback: no search results — use LLM knowledge
+        print(f"[worker:{angle.topic}] No search results, falling back to LLM knowledge")
+        sources = []
 
-            prompt = f"""You are a competitive intelligence researcher analyzing "{company}".
+        prompt = f"""You are a competitive intelligence researcher analyzing "{company}".
 
 Research angle: {angle.topic}
 Question: {angle.question}
@@ -146,26 +155,22 @@ based on training data and may not reflect the latest information.
 
 Keep your response under 300 words."""
 
-        response = llm.invoke(prompt)
+    response = llm.invoke(prompt)
 
-        findings.append(
-            ResearchFinding(
-                topic=angle.topic,
-                content=response.content,
-                sources=sources,
-            )
-        )
-        print(f"[researcher] Completed: {angle.topic} ({len(sources)} sources)")
+    finding = ResearchFinding(
+        topic=angle.topic,
+        content=response.content,
+        sources=sources,
+    )
 
-    return {"findings": findings}
+    print(f"[worker:{angle.topic}] Done ({len(sources)} sources)")
+
+    return {"findings": [finding]}
 
 
 def synthesizer(state: ScopeOutState) -> dict:
     """
     Combine all research findings into a polished, sourced teardown report.
-
-    Phase 2 upgrade: the prompt now instructs Gemini to weave source
-    references into the report so every major claim is traceable.
     """
     company = state["company"]
     findings = state["findings"]
