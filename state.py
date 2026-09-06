@@ -1,17 +1,13 @@
 """
-ScopeOut — State Schema
-========================
-Defines the data models (Pydantic) and the graph state (TypedDict).
-
-Design decision: TypedDict for the graph state so we can use LangGraph's
-reducer annotations (e.g. operator.add to let parallel workers append
-findings). Pydantic BaseModel for the data structures inside those channels,
-giving us validation when the critic loop checks quality in Phase 4.
+ScopeOut — State Schema (Phase 4)
+==================================
+Phase 4 upgrade: replaced operator.add with _merge_findings reducer
+so redo workers overwrite weak findings instead of duplicating them.
+Added critic loop state fields: critique, flagged_topics, retry_count.
 """
 
 from __future__ import annotations
 
-import operator
 from typing import Annotated, TypedDict
 
 from pydantic import BaseModel, Field
@@ -34,8 +30,30 @@ class ResearchFinding(BaseModel):
     content: str = Field(description="The research content / analysis")
     sources: list[str] = Field(
         default_factory=list,
-        description="Source URLs — empty until Phase 2 adds web search",
+        description="Source URLs backing this finding",
     )
+
+
+# ── Custom Reducer ──────────────────────────────────────────────────
+
+
+def _merge_findings(
+    existing: list[ResearchFinding], new: list[ResearchFinding]
+) -> list[ResearchFinding]:
+    """
+    Merge findings by topic — newer entries overwrite older ones.
+
+    This supports both:
+      - Phase 3 parallel workers appending their own finding
+      - Phase 4 redo workers replacing a weak finding with an improved one
+
+    With operator.add, a redo would create a duplicate (old + new for
+    the same topic). This reducer upserts by topic instead.
+    """
+    merged = {f.topic: f for f in existing}
+    for f in new:
+        merged[f.topic] = f
+    return list(merged.values())
 
 
 # ── Graph State (TypedDict) ─────────────────────────────────────────
@@ -45,14 +63,18 @@ class ScopeOutState(TypedDict):
     """
     The shared state that flows through the ScopeOut graph.
 
-    - company:  the user's input (company or product name)
-    - angles:   research angles produced by the planner
-    - findings: research results — uses operator.add so parallel workers
-                in Phase 3 can each append without overwriting each other
-    - report:   the final synthesized teardown
+    Phase 4 additions:
+      - critique:       structured evaluation from the critic
+      - flagged_topics: topics that need redo (empty = all pass)
+      - retry_count:    how many critic rounds have run (caps at 2)
     """
 
     company: str
     angles: list[ResearchAngle]
-    findings: Annotated[list[ResearchFinding], operator.add]
+    findings: Annotated[list[ResearchFinding], _merge_findings]
     report: str
+
+    # Phase 4: critic loop
+    critique: list[dict]        # [{"topic": ..., "verdict": "pass"/"redo", "reason": ...}]
+    flagged_topics: list[str]   # topics flagged for redo
+    retry_count: int            # number of critic evaluations completed
