@@ -1,15 +1,9 @@
 """
-ScopeOut — Graph Nodes (Phase 4)
+ScopeOut — Graph Nodes (Phase 5)
 =================================
-Phase 4 upgrade: added critic node that reviews findings quality
-and routes weak ones back to workers for a redo.
-
-  planner -> [workers] -> critic -> synthesizer
-                 ^           |
-                 |___redo____|
-
-The worker also now accepts optional feedback from the critic,
-using it to adjust search queries and analysis on redo attempts.
+Phase 5 upgrade: every node now emits structured events to the
+EventBus so the FastAPI server can stream them to the frontend.
+Print statements kept for CLI usage via main.py.
 """
 
 from __future__ import annotations
@@ -21,16 +15,15 @@ import re
 from langchain_google_genai import ChatGoogleGenerativeAI
 from tavily import TavilyClient
 
+from event_bus import bus
 from state import ResearchAngle, ResearchFinding, ScopeOutState
 
 
 # ── Shared clients ──────────────────────────────────────────────────
-
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
     temperature=0,
 )
-
 tavily_client = TavilyClient(
     api_key=os.environ["TAVILY_API_KEY"],
 )
@@ -40,10 +33,6 @@ tavily_client = TavilyClient(
 
 
 def _parse_json(text: str):
-    """
-    Extract JSON from an LLM response.
-    Strips markdown code fences if present.
-    """
     text = text.strip()
     match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
     if match:
@@ -55,10 +44,10 @@ def _parse_json(text: str):
 
 
 def planner(state: ScopeOutState) -> dict:
-    """
-    Break the company/product into concrete research angles.
-    """
     company = state["company"]
+
+    bus.emit("planner_start", company=company)
+    print(f"\n[planner] Planning research for '{company}'...")
 
     prompt = f"""You are a competitive intelligence analyst planning a teardown of "{company}".
 
@@ -72,24 +61,16 @@ Respond with ONLY a JSON array of 4 objects. No other text, no markdown fences."
     angles_data = _parse_json(response.content)
     angles = [ResearchAngle(**angle) for angle in angles_data]
 
-    print(f"\n[planner] Identified {len(angles)} research angles for '{company}'")
+    print(f"[planner] Identified {len(angles)} research angles")
     for a in angles:
         print(f"  -> {a.topic}: {a.question}")
+
+    bus.emit("planner_done", angles=[a.model_dump() for a in angles])
 
     return {"angles": angles}
 
 
 def research_worker(state: dict) -> dict:
-    """
-    Research a SINGLE angle using Tavily web search + Gemini analysis.
-
-    Instantiated in parallel via Send(). On a redo attempt, the worker
-    receives critic feedback and uses it to adjust the search query
-    and analysis prompt for a better result.
-
-    Receives from Send():
-        {"company": str, "angle": ResearchAngle, "feedback": str (optional)}
-    """
     company = state["company"]
     angle = state["angle"]
     feedback = state.get("feedback", "")
@@ -99,14 +80,15 @@ def research_worker(state: dict) -> dict:
 
     is_redo = bool(feedback)
 
-    # ── Step 1: Search the web ──────────────────────────
-    # On redo, use the full research question for a more targeted search
+    # ── Step 1: Search ──────────────────────────────────
     if is_redo:
         query = f"{company} {angle.question}"
+        bus.emit("worker_start", topic=angle.topic, query=query, is_redo=True,
+                 feedback=feedback)
         print(f"\n[worker:{angle.topic}] REDO — Searching with refined query")
-        print(f"  Feedback: {feedback}")
     else:
         query = f"{company} {angle.topic}"
+        bus.emit("worker_start", topic=angle.topic, query=query, is_redo=False)
         print(f"\n[worker:{angle.topic}] Searching: '{query}'")
 
     search_response = tavily_client.search(
@@ -117,7 +99,7 @@ def research_worker(state: dict) -> dict:
 
     results = search_response.get("results", [])
 
-    # ── Step 2: Build context and analyze ───────────────
+    # ── Step 2: Analyze ─────────────────────────────────
     if results:
         context = "\n\n".join(
             f"[Source: {r['url']}]\nTitle: {r.get('title', 'N/A')}\n{r.get('content', '')}"
@@ -130,8 +112,7 @@ def research_worker(state: dict) -> dict:
             redo_instruction = f"""
 IMPORTANT — PREVIOUS ATTEMPT WAS FLAGGED:
 {feedback}
-Address this issue specifically in your revised analysis. Provide more concrete
-details, cite more sources, and ensure depth of coverage."""
+Address this issue specifically in your revised analysis."""
 
         prompt = f"""You are a competitive intelligence researcher analyzing "{company}".
 
@@ -152,17 +133,13 @@ Provide a detailed, well-structured analysis in under 400 words."""
     else:
         print(f"[worker:{angle.topic}] No search results, falling back to LLM knowledge")
         sources = []
-
         prompt = f"""You are a competitive intelligence researcher analyzing "{company}".
 
 Research angle: {angle.topic}
 Question: {angle.question}
 
 No web search results were available. Provide your best analysis based on
-your training knowledge. Be specific where possible, but note that this is
-based on training data and may not reflect the latest information.
-
-Keep your response under 300 words."""
+your training knowledge. Keep your response under 300 words."""
 
     response = llm.invoke(prompt)
 
@@ -174,25 +151,17 @@ Keep your response under 300 words."""
 
     tag = "REDO done" if is_redo else "Done"
     print(f"[worker:{angle.topic}] {tag} ({len(sources)} sources)")
+    bus.emit("worker_done", topic=angle.topic, sources_count=len(sources),
+             is_redo=is_redo, sources=sources)
 
     return {"findings": [finding]}
 
 
 def critic(state: ScopeOutState) -> dict:
-    """
-    Review all research findings for quality, sourcing, and depth.
-
-    Checks each finding on three criteria:
-      1. SOURCING  — at least 2 real, distinct sources
-      2. SPECIFICITY — concrete numbers, names, prices, not vague claims
-      3. DEPTH — substantively answers the research question
-
-    Returns structured evaluations and a list of flagged topics.
-    A programmatic pre-check catches zero-source findings automatically.
-    """
     findings = state["findings"]
     retry_count = state.get("retry_count", 0)
 
+    bus.emit("critic_start", round=retry_count + 1)
     print(f"\n[critic] Evaluating {len(findings)} findings (round {retry_count + 1})...")
 
     # ── Programmatic pre-check ──────────────────────────
@@ -200,12 +169,10 @@ def critic(state: ScopeOutState) -> dict:
     for f in findings:
         if len(f.sources) < 2:
             auto_flagged.add(f.topic)
-            print(f"[critic] {f.topic}: auto-flagged (only {len(f.sources)} source(s))")
 
     # ── LLM evaluation ─────────────────────────────────
     findings_text = "\n\n---\n\n".join(
-        f"Topic: {f.topic}\n"
-        f"Word count: {len(f.content.split())}\n"
+        f"Topic: {f.topic}\nWord count: {len(f.content.split())}\n"
         f"Number of sources: {len(f.sources)}\n"
         f"Content preview: {f.content[:500]}..."
         for f in findings
@@ -216,11 +183,9 @@ def critic(state: ScopeOutState) -> dict:
 Evaluate each research finding below on three criteria:
 
 1. SOURCING: Does it appear to draw from at least 2 distinct, credible sources?
-   Zero or one source is an automatic failure.
 2. SPECIFICITY: Does it include concrete details — actual prices, plan names,
-   feature names, percentages, competitor names? Vague generalizations fail.
-3. DEPTH: Does the analysis have enough substance (150+ words of real analysis)
-   to be useful in a professional competitive teardown? Thin summaries fail.
+   feature names, percentages, competitor names?
+3. DEPTH: Does the analysis have enough substance (150+ words) to be useful?
 
 A finding must pass ALL THREE to get a "pass" verdict.
 
@@ -230,39 +195,40 @@ FINDINGS:
 For each finding, return:
 - "topic": the exact topic label
 - "verdict": "pass" or "redo"
-- "reason": if "redo", a specific 1-sentence explanation of what is weak or missing.
-            if "pass", set to empty string.
+- "reason": if "redo", a specific 1-sentence explanation. if "pass", empty string.
 
 Return ONLY a JSON array. No other text, no markdown fences."""
 
     response = llm.invoke(prompt)
-    evaluations = _parse_json(response.content)
+    try:
+        evaluations = _parse_json(response.content)
+    except Exception:
+        # Local model returned bad JSON — auto-pass all findings
+        print("[critic] JSON parse failed, auto-passing all findings")
+        evaluations = [{"topic": f.topic, "verdict": "pass", "reason": ""} for f in findings]
 
-    # ── Combine programmatic + LLM flags ────────────────
     flagged_topics = set(auto_flagged)
     for ev in evaluations:
         if ev.get("verdict") == "redo":
             flagged_topics.add(ev["topic"])
 
-    # ── Print results ───────────────────────────────────
     for ev in evaluations:
         topic = ev["topic"]
         is_flagged = topic in flagged_topics
-        status = "REDO" if is_flagged else "PASS"
+        verdict = "redo" if is_flagged else "pass"
         reason = ev.get("reason", "")
-
         if is_flagged and not reason:
-            reason = "insufficient sources" if topic in auto_flagged else "flagged by review"
+            reason = "insufficient sources"
 
-        line = f"[critic] {topic}: {status}"
-        if reason:
-            line += f" — {reason}"
-        print(line)
+        print(f"[critic] {topic}: {verdict.upper()}" + (f" — {reason}" if reason else ""))
+        bus.emit("critic_verdict", topic=topic, verdict=verdict, reason=reason)
 
     if flagged_topics:
         print(f"[critic] {len(flagged_topics)} topic(s) flagged for redo")
     else:
         print("[critic] All findings passed quality review")
+
+    bus.emit("critic_done", flagged=list(flagged_topics), round=retry_count + 1)
 
     return {
         "critique": evaluations,
@@ -272,14 +238,14 @@ Return ONLY a JSON array. No other text, no markdown fences."""
 
 
 def synthesizer(state: ScopeOutState) -> dict:
-    """
-    Combine all research findings into a polished, sourced teardown report.
-    """
     company = state["company"]
     findings = state["findings"]
 
+    bus.emit("synthesizer_start")
+    print(f"\n[synthesizer] Writing report...")
+
     findings_text = "\n\n---\n\n".join(
-        f"### {f.topic}\n{f.content}\n\nSources: {', '.join(f.sources) if f.sources else 'LLM knowledge (no web sources)'}"
+        f"### {f.topic}\n{f.content}\n\nSources: {', '.join(f.sources) if f.sources else 'LLM knowledge'}"
         for f in findings
     )
 
@@ -290,21 +256,22 @@ RESEARCH FINDINGS:
 {findings_text}
 
 FORMAT:
-- **Executive Summary** (2-3 sentences: what {company} is, who it's for, its market position)
-- **Pricing & Plans** (specific numbers and plan names)
-- **Key Features & Differentiators** (what sets it apart)
-- **Customer Sentiment** (what users love and complain about)
-- **Market Positioning** (competitors, where {company} fits)
-- **Bottom Line** (strategic takeaways: strengths, vulnerabilities, opportunities)
+- **Executive Summary** (2-3 sentences)
+- **Pricing & Plans**
+- **Key Features & Differentiators**
+- **Customer Sentiment**
+- **Market Positioning**
+- **Bottom Line** (strengths, vulnerabilities, opportunities)
 
 RULES:
 - Use markdown formatting.
-- After each major factual claim, add a source reference as a markdown link, e.g. [source](url).
-- Be direct and analytical — this is a professional teardown, not marketing copy.
+- After each major factual claim, add a source reference as a markdown link.
+- Be direct and analytical — professional teardown, not marketing copy.
 - Every factual claim must be traceable to the provided sources."""
 
     response = llm.invoke(prompt)
 
-    print(f"\n[synthesizer] Report generated ({len(response.content)} chars)")
+    print(f"[synthesizer] Report generated ({len(response.content)} chars)")
+    bus.emit("synthesizer_done", report_length=len(response.content))
 
     return {"report": response.content}

@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ScopeOut — Mission Control</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#f0ebe0;--surface:#e8e1d2;--surface-2:#ddd5c4;--border:#c4b99e;--border-strong:#a89b80;--text:#2d2a24;--text-dim:#6b6459;--text-muted:#9b9488;--accent:#c8952e;--accent-bg:#f5dfa0;--blue:#2563eb;--violet:#7c3aed;--amber:#c8660a;--emerald:#0f7b4f;--red:#c92a2a;--floor:#3d8b8b;--floor-line:#347676;--wall:#d6ccb5;--desk:#a0794c;--desk-dark:#7a5a30;--desk-top:#c49a62;--font:'Space Grotesk',system-ui,sans-serif;--mono:'JetBrains Mono',monospace}
+html,body,#root{height:100%;overflow:hidden;margin:0}
+#root{display:flex;flex-direction:column}
+body{font-family:var(--font);background:var(--bg);color:var(--text)}
+.header{padding:0.4rem 1rem;display:flex;align-items:center;gap:1rem;border-bottom:2px solid var(--border);background:var(--surface);flex-shrink:0}
+.logo{font-size:1.05rem;font-weight:700;white-space:nowrap}.logo em{font-style:normal;color:var(--accent);margin-right:0.2rem}.logo span{color:var(--text-muted);font-weight:400;font-size:0.65rem;margin-left:0.2rem}
+.header input{flex:1;max-width:240px;padding:0.35rem 0.6rem;border:2px solid var(--border);border-radius:4px;background:#fff;color:var(--text);font-family:var(--font);font-size:0.8rem;outline:none}
+.header input:focus{border-color:var(--accent)}
+.btn{padding:0.35rem 0.9rem;border:2px solid var(--border-strong);border-radius:4px;font-family:var(--font);font-weight:600;font-size:0.78rem;cursor:pointer;background:var(--accent-bg);color:var(--text)}.btn:hover{background:var(--accent);color:#fff}.btn:disabled{opacity:0.4;cursor:not-allowed}
+.timer{font-size:0.68rem;color:var(--text-muted);font-family:var(--mono);margin-left:auto}
+.main{flex:1;display:flex;min-height:0}
+.office-panel{width:74%;display:flex;flex-direction:column;border-right:2px solid var(--border);min-height:0}
+.office-bar{padding:0.2rem 0.6rem;font-family:var(--mono);font-size:0.58rem;font-weight:600;color:var(--text-muted);background:var(--surface);border-bottom:2px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:0.35rem}
+.dot{width:6px;height:6px;border-radius:50%;display:inline-block}.dot.r{background:#e74c3c}.dot.y{background:#f1c40f}.dot.g{background:#2ecc71}
+.office{flex:1;position:relative;overflow:hidden;background:var(--floor);background-image:repeating-linear-gradient(0deg,transparent,transparent 31px,var(--floor-line) 31px,var(--floor-line) 32px),repeating-linear-gradient(90deg,transparent,transparent 31px,var(--floor-line) 31px,var(--floor-line) 32px);min-height:0}
+.room{position:absolute;border:3px solid var(--wall);background:rgba(255,255,255,0.03);border-radius:2px}
+.room-label{position:absolute;top:3px;left:6px;font-family:var(--mono);font-size:0.45rem;font-weight:600;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.05em}
+.door{position:absolute;background:var(--floor);z-index:2}
+.furniture{position:absolute;pointer-events:none;z-index:3}
+.desk{position:absolute;width:52px;height:34px;z-index:4}
+.desk-body{width:100%;height:100%;background:var(--desk);border:2px solid var(--desk-dark);border-radius:2px;position:relative}
+.desk-body::after{content:'';position:absolute;top:0;left:0;right:0;height:4px;background:var(--desk-top);border-radius:1px 1px 0 0}
+.monitor{position:absolute;top:5px;left:50%;transform:translateX(-50%);width:18px;height:13px;background:#111;border:2px solid #374151;border-radius:1px}
+.monitor.on::after{content:'';position:absolute;inset:2px;background:#10b981;border-radius:1px;animation:glow 2s ease infinite}
+@keyframes glow{0%,100%{opacity:0.4}50%{opacity:1}}
+.char{position:absolute;display:flex;flex-direction:column;align-items:center;z-index:10;transition:left 1.2s ease-in-out,top 1.2s ease-in-out}
+.char.walking{animation:walkAnim 0.25s steps(2) infinite}
+.char.working:not(.walking){animation:bob 0.5s ease-in-out infinite}
+.char.redo:not(.walking){animation:bob 0.35s ease-in-out infinite}
+.char.done .sprite-wrap{filter:drop-shadow(0 0 4px rgba(15,123,79,0.7))}
+.char.redo .sprite-wrap{filter:drop-shadow(0 0 5px rgba(200,102,10,0.7))}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}
+@keyframes walkAnim{0%{transform:translateY(0) rotate(-2deg)}50%{transform:translateY(-3px) rotate(2deg)}100%{transform:translateY(0) rotate(-2deg)}}
+.sprite-wrap{width:30px;height:40px;image-rendering:pixelated}
+.char-label{background:rgba(0,0,0,0.6);padding:0px 4px;border-radius:2px;margin-top:1px}
+.char-name{font-size:0.46rem;font-weight:600;color:#fff;font-family:var(--mono);line-height:1.3}
+.char-status{font-size:0.4rem;font-family:var(--mono);font-weight:600;padding:0px 3px;border-radius:2px;margin-top:1px}
+.char.idle .char-status{background:rgba(0,0,0,0.3);color:rgba(255,255,255,0.45)}
+.char.working .char-status{background:rgba(37,99,235,0.5);color:#bfdbfe}
+.char.done .char-status{background:rgba(15,123,79,0.5);color:#a7f3d0}
+.char.redo .char-status{background:rgba(200,102,10,0.5);color:#fed7aa}
+.bubble{position:absolute;bottom:calc(100% + 3px);left:50%;transform:translateX(-50%);background:#fffdf7;color:#2d2a24;border:2px solid var(--border-strong);border-radius:5px;padding:2px 6px;font-size:0.48rem;font-weight:500;white-space:nowrap;max-width:130px;overflow:hidden;text-overflow:ellipsis;animation:bubIn 0.2s ease;z-index:25;box-shadow:1px 1px 3px rgba(0,0,0,0.12)}
+.bubble::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:3px solid transparent;border-top-color:var(--border-strong)}
+@keyframes bubIn{from{opacity:0;transform:translateX(-50%) translateY(2px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+.packet{position:absolute;width:8px;height:6px;background:var(--accent);border-radius:1px;z-index:20;pointer-events:none;box-shadow:0 0 5px rgba(200,149,46,0.5);transition:left 0.6s ease-in-out,top 0.6s ease-in-out}
+.deco{position:absolute;pointer-events:none;z-index:5}
+.right-panel{width:26%;display:flex;flex-direction:column;min-height:0}
+.tabs{display:flex;border-bottom:2px solid var(--border);flex-shrink:0}
+.tab{flex:1;padding:0.4rem;text-align:center;font-family:var(--mono);font-size:0.6rem;font-weight:600;cursor:pointer;color:var(--text-muted);background:var(--surface-2);border-right:1px solid var(--border);user-select:none}.tab:last-child{border-right:none}.tab.active{background:var(--bg);color:var(--text);box-shadow:inset 0 -2px 0 var(--accent)}
+.tab-body{flex:1;overflow:hidden;min-height:0}
+.tab-page{height:100%;overflow-y:auto}
+.feed-item{padding:0.2rem 0.5rem;font-size:0.6rem;line-height:1.5;font-family:var(--mono);display:flex;gap:0.3rem}
+.feed-time{color:var(--text-muted);flex-shrink:0;font-size:0.55rem;min-width:52px}
+.f-planner{color:var(--blue)}.f-worker{color:var(--violet)}.f-critic{color:var(--amber)}.f-synth{color:var(--emerald)}.f-error{color:var(--red)}.f-system{color:var(--text-dim)}
+.report-area{padding:0.6rem;font-size:0.72rem;line-height:1.65}
+.report-area h1{font-size:0.95rem;margin:0.8rem 0 0.3rem;font-weight:700}
+.report-area h2{font-size:0.84rem;margin:0.7rem 0 0.25rem;font-weight:600;border-bottom:1px solid var(--border);padding-bottom:0.1rem}
+.report-area h3{font-size:0.76rem;margin:0.5rem 0 0.2rem;font-weight:600}
+.report-area p{margin-bottom:0.35rem}.report-area ul,.report-area ol{margin:0.2rem 0 0.4rem 1rem}
+.report-area li{margin-bottom:0.12rem}.report-area a{color:var(--blue)}.report-area strong{color:var(--text)}
+.report-empty{display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:0.7rem}
+::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback}=React;
+
+/* ── Conversations (pairs, no repeats) ─── */
+const CONVOS=[
+  ["Hey, how's it going?","Not bad! Busy day though"],
+  ["Coffee run?","Oh yes please! ☕"],
+  ["See the meeting notes?","Not yet, was it long?"],
+  ["What's for lunch?","Pizza sounds perfect 🍕"],
+  ["Nice work on that!","Thanks! Took forever 😅"],
+  ["Ready for standup?","Give me 5 minutes"],
+  ["WiFi is so slow today","Yeah it's been awful"],
+  ["Got any snacks?","Check the break room 🍪"],
+  ["How was your weekend?","Too short as always"],
+  ["This bug makes no sense","Let me take a look"],
+  ["New project incoming","Oh great, more work 😄"],
+  ["Did you deploy yet?","Waiting on review"],
+];
+const COFFEE_MSGS=["Brewing a fresh one ☕","Mmm, good coffee","Extra sugar today ☕","Need this caffeine","Quick coffee break"];
+const SOLO_IDLES=["...", "🎵", "💭", "📱"];
+
+const DY=13; /* desk offset below char */
+const AGENTS={
+  planner:    {id:'planner',    name:'Atlas',hair:'#2d3748',shirt:'#2563eb',skin:'#FDBCB4',
+               desk:{x:7,y:16}, meeting:{x:63,y:10}, coffee:{x:15,y:68}},
+  pricing:    {id:'pricing',    name:'Priya',hair:'#1a1a2e',shirt:'#7c3aed',skin:'#D4956A',
+               desk:{x:28,y:10}, meeting:{x:70,y:8}, coffee:{x:22,y:68}},
+  features:   {id:'features',   name:'Felix',hair:'#92400e',shirt:'#7c3aed',skin:'#FDBCB4',
+               desk:{x:42,y:10}, meeting:{x:80,y:8}, coffee:{x:28,y:68}},
+  sentiment:  {id:'sentiment',  name:'Sage', hair:'#1a1a2e',shirt:'#7c3aed',skin:'#8D5524',
+               desk:{x:28,y:30}, meeting:{x:70,y:28}, coffee:{x:15,y:75}},
+  positioning:{id:'positioning', name:'Nova',hair:'#4a1942',shirt:'#7c3aed',skin:'#FDBCB4',
+               desk:{x:42,y:30}, meeting:{x:80,y:28}, coffee:{x:22,y:75}},
+  critic:     {id:'critic',     name:'Quinn',hair:'#78350f',shirt:'#c2410c',skin:'#FDBCB4',
+               desk:{x:60,y:64}, meeting:{x:88,y:16}, coffee:{x:28,y:75}},
+  synthesizer:{id:'synthesizer', name:'Aria',hair:'#1e1b4b',shirt:'#047857',skin:'#D4956A',
+               desk:{x:80,y:64}, meeting:{x:88,y:26}, coffee:{x:35,y:68}},
+};
+const TOPIC_MAP={'Pricing & Plans':'pricing','Key Features':'features','Customer Sentiment':'sentiment','Market Positioning':'positioning'};
+const initState=()=>Object.fromEntries(Object.keys(AGENTS).map(k=>[k,{status:'idle',message:'',pos:'desk'}]));
+
+function Sprite({hair,shirt,skin,working}){
+  return(<svg viewBox="0 0 14 20" width="30" height="40" style={{imageRendering:'pixelated'}}>
+    <rect x="4" y="0" width="6" height="3" fill={hair}/><rect x="3" y="1" width="8" height="2" fill={hair}/>
+    <rect x="3" y="3" width="8" height="6" fill={skin}/>
+    <rect x="5" y="5" width="2" height="1" fill="#1a1a2e"/><rect x="8" y="5" width="2" height="1" fill="#1a1a2e"/>
+    <rect x="6" y="7" width="2" height="1" fill={skin} opacity="0.5"/>
+    <rect x="2" y="9" width="10" height="6" fill={shirt}/><rect x="1" y="9" width="2" height="5" fill={shirt}/><rect x="11" y="9" width="2" height="5" fill={shirt}/>
+    {working?<><rect x="0" y="12" width="3" height="2" fill={skin}/><rect x="11" y="11" width="3" height="2" fill={skin}/></>
+    :<><rect x="1" y="14" width="2" height="1" fill={skin}/><rect x="11" y="14" width="2" height="1" fill={skin}/></>}
+    <rect x="4" y="15" width="3" height="5" fill="#374151"/><rect x="7" y="15" width="3" height="5" fill="#4b5563"/>
+    <rect x="4" y="19" width="3" height="1" fill="#1f2937"/><rect x="7" y="19" width="3" height="1" fill="#1f2937"/>
+  </svg>);
+}
+
+function Character({def,state}){
+  const s=state.status;const isW=s==='working'||s==='redo';
+  const pos=def[state.pos]||def.desk;
+  const[walking,setWalking]=useState(false);const prev=useRef(state.pos);
+  useEffect(()=>{if(prev.current!==state.pos){setWalking(true);const t=setTimeout(()=>setWalking(false),1300);prev.current=state.pos;return()=>clearTimeout(t)}},[state.pos]);
+  return(
+    <div className={`char ${s}${walking?' walking':''}`} style={{left:`${pos.x}%`,top:`${pos.y}%`}}>
+      {state.message&&<div className="bubble">{state.message}</div>}
+      <div className="sprite-wrap"><Sprite hair={def.hair} shirt={def.shirt} skin={def.skin} working={isW}/></div>
+      <div className="char-label"><div className="char-name">{def.name}</div></div>
+      <div className="char-status">{s==='idle'?'idle':s==='working'?'working':s==='done'?'✓ done':'↻ redo'}</div>
+    </div>
+  );
+}
+
+function Office({agents,packets}){
+  return(
+    <div className="office-panel">
+      <div className="office-bar"><span className="dot r"/><span className="dot y"/><span className="dot g"/> ScopeOut Office</div>
+      <div className="office">
+        {/* ── Rooms (equal bottom split) ─── */}
+        <div className="room" style={{left:'1%',top:'1%',width:'19%',height:'46%'}}>
+          <div className="room-label">Boss Office</div>
+          <div className="door" style={{right:-3,top:'35%',width:6,height:'25%'}}/>
+        </div>
+        <div className="room" style={{left:'21.5%',top:'1%',width:'33%',height:'46%'}}>
+          <div className="room-label">Open Office</div>
+        </div>
+        <div className="room" style={{left:'56%',top:'1%',width:'43%',height:'46%'}}>
+          <div className="room-label">Meeting Room</div>
+          <div className="door" style={{left:-3,top:'35%',width:6,height:'25%'}}/>
+        </div>
+        <div className="room" style={{left:'1%',top:'52%',width:'48%',height:'46%'}}>
+          <div className="room-label">Break Room</div>
+          <div className="door" style={{right:-3,top:'10%',width:6,height:'20%'}}/>
+        </div>
+        <div className="room" style={{left:'50.5%',top:'52%',width:'48.5%',height:'46%'}}>
+          <div className="room-label">Review Department</div>
+          <div className="door" style={{left:'8%',top:-3,width:'12%',height:6}}/>
+        </div>
+
+        {/* ── Meeting table ─── */}
+        <div className="furniture" style={{left:'67%',top:'14%',width:'16%',height:'20%',background:'#8B6914',border:'2px solid #6B4F10',borderRadius:4}}/>
+        <div className="deco" style={{left:'72%',top:'3%',fontSize:10,color:'rgba(255,255,255,0.45)'}}>📋 Whiteboard</div>
+
+        {/* ── Break room furniture ─── */}
+        <div className="furniture" style={{left:'3%',top:'80%',width:'18%',height:'6%',background:'#c49a62',border:'2px solid #a0794c',borderRadius:1}}/>
+        <div className="deco" style={{left:'6%',top:'60%',fontSize:18}}>☕</div>
+        <div className="deco" style={{left:'22%',top:'85%',fontSize:12}}>🍪</div>
+        <div className="deco" style={{left:'35%',top:'70%',fontSize:13}}>🪑</div>
+        <div className="deco" style={{left:'40%',top:'78%',fontSize:13}}>🪑</div>
+        <div className="furniture" style={{left:'28%',top:'75%',width:'10%',height:'8%',background:'#8B6914',border:'2px solid #6B4F10',borderRadius:8}}/>
+
+        {/* ── Desks (aligned in rooms) ─── */}
+        {Object.values(AGENTS).map(a=><div key={a.id+'d'} className="desk" style={{left:`${a.desk.x}%`,top:`${a.desk.y+DY}%`}}>
+          <div className="desk-body"><div className={`monitor${agents[a.id]?.status==='working'||agents[a.id]?.status==='redo'?' on':''}`}/></div>
+        </div>)}
+
+        {/* ── Decorations ─── */}
+        <div className="deco" style={{left:'14%',top:'3%',fontSize:10}}>🕐</div>
+        <div className="deco" style={{left:'7%',top:'3%',fontSize:9}}>🖼️</div>
+        <div className="deco" style={{left:'36%',top:'43%',fontSize:11}}>🌿</div>
+        <div className="deco" style={{left:'50%',top:'43%',fontSize:9}}>🚰</div>
+        <div className="deco" style={{left:'92%',top:'55%',fontSize:10}}>📦</div>
+        <div className="deco" style={{left:'85%',top:'88%',fontSize:13}}>🛋️</div>
+        <div className="deco" style={{left:'70%',top:'88%',fontSize:9}}>🗑️</div>
+
+        {/* ── Characters ─── */}
+        {Object.keys(AGENTS).map(id=><Character key={id} def={AGENTS[id]} state={agents[id]}/>)}
+        {packets.map(p=><div key={p.id} className="packet" style={{left:`${p.x}%`,top:`${p.y}%`}}/>)}
+      </div>
+    </div>
+  );
+}
+
+function Feed({events}){const ref=useRef(null);useEffect(()=>{if(ref.current)ref.current.scrollTop=ref.current.scrollHeight},[events]);
+  return(<div className="tab-page" ref={ref}>{events.length===0&&<div style={{padding:'0.8rem',color:'var(--text-muted)',fontSize:'0.65rem',textAlign:'center'}}>Waiting for analysis...</div>}
+    {events.map((e,i)=><div key={i} className="feed-item"><span className="feed-time">{e.time}</span><span className={`f-${e.cls}`}>{e.text}</span></div>)}</div>);}
+function md(t){return t.replace(/^### (.+)$/gm,'<h3>$1</h3>').replace(/^## (.+)$/gm,'<h2>$1</h2>').replace(/^# (.+)$/gm,'<h1>$1</h1>').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\*(.+?)\*/g,'<em>$1</em>').replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank">$1</a>').replace(/^\* (.+)$/gm,'<li>$1</li>').replace(/^\d+\.\s+(.+)$/gm,'<li>$1</li>').replace(/\n{2,}/g,'</p><p>').replace(/^([^<])/,'<p>$1').replace(/([^>])$/,'$1</p>')}
+
+function App(){
+  const[company,setCompany]=useState('Notion');
+  const[running,setRunning]=useState(false);
+  const[agents,setAgents]=useState(initState);
+  const[events,setEvents]=useState([]);
+  const[report,setReport]=useState('');
+  const[packets,setPackets]=useState([]);
+  const[elapsed,setElapsed]=useState(0);
+  const[tab,setTab]=useState('feed');
+  const timerRef=useRef(null);const pktId=useRef(0);
+  const convoIdx=useRef(0);const coffeeTimer=useRef(null);const chatTimer=useRef(null);
+
+  const addEvent=useCallback((text,cls='system')=>{const t=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});setEvents(prev=>[...prev,{time:t,text,cls}])},[]);
+  const setAgent=useCallback((id,patch)=>{setAgents(prev=>({...prev,[id]:{...prev[id],...patch}}))},[]);
+  const sendPacket=useCallback((fromId,toId)=>{const f=AGENTS[fromId],t=AGENTS[toId],id=pktId.current++;
+    setPackets(prev=>[...prev,{id,x:f.desk.x+2,y:f.desk.y+5}]);
+    setTimeout(()=>setPackets(prev=>prev.map(p=>p.id===id?{...p,x:t.desk.x+2,y:t.desk.y+5}:p)),50);
+    setTimeout(()=>setPackets(prev=>prev.filter(p=>p.id!==id)),700);},[]);
+
+  /* ── Idle: real conversations between pairs ─── */
+  useEffect(()=>{
+    chatTimer.current=setInterval(()=>{
+      setAgents(prev=>{
+        const idleIds=Object.keys(prev).filter(k=>prev[k].status==='idle'&&prev[k].pos==='desk'&&!prev[k].message);
+        if(idleIds.length<2)return prev;
+        // Pick two random idle characters
+        const shuffled=[...idleIds].sort(()=>Math.random()-0.5);
+        const a=shuffled[0],b=shuffled[1];
+        const convo=CONVOS[convoIdx.current%CONVOS.length];
+        convoIdx.current++;
+        // Person A speaks first
+        const next={...prev,[a]:{...prev[a],message:convo[0]}};
+        // Person B responds after 2s
+        setTimeout(()=>setAgents(p=>({...p,[b]:{...p[b],message:convo[1]}})),2000);
+        // Clear both after 5s
+        setTimeout(()=>setAgents(p=>({...p,[a]:{...p[a],message:''},[b]:{...p[b],message:''}})),5000);
+        return next;
+      });
+    },6000);
+    return()=>clearInterval(chatTimer.current);
+  },[]);
+
+  /* ── Idle: coffee room visits ─── */
+  useEffect(()=>{
+    coffeeTimer.current=setInterval(()=>{
+      setAgents(prev=>{
+        const idleAtDesk=Object.keys(prev).filter(k=>prev[k].status==='idle'&&prev[k].pos==='desk'&&!prev[k].message);
+        if(idleAtDesk.length===0)return prev;
+        const pick=idleAtDesk[Math.floor(Math.random()*idleAtDesk.length)];
+        const msg=COFFEE_MSGS[Math.floor(Math.random()*COFFEE_MSGS.length)];
+        // Walk to coffee room
+        const next={...prev,[pick]:{...prev[pick],pos:'coffee',message:msg}};
+        // Clear message after 3s
+        setTimeout(()=>setAgents(p=>({...p,[pick]:{...p[pick],message:''}})),3000);
+        // Walk back after 8s
+        setTimeout(()=>setAgents(p=>({...p,[pick]:{...p[pick],pos:'desk',message:'Back to work!'}})),8000);
+        // Clear return message
+        setTimeout(()=>setAgents(p=>({...p,[pick]:{...p[pick],message:''}})),10000);
+        return next;
+      });
+    },20000);
+    return()=>clearInterval(coffeeTimer.current);
+  },[]);
+
+  const start=useCallback(()=>{
+    if(!company.trim()||running)return;
+    setRunning(true);setAgents(initState());setEvents([]);setReport('');setPackets([]);setElapsed(0);setTab('feed');
+    const t0=Date.now();timerRef.current=setInterval(()=>setElapsed(Math.floor((Date.now()-t0)/1000)),1000);
+    const es=new EventSource(`/api/analyze/${encodeURIComponent(company.trim())}`);
+    es.onmessage=(e)=>{
+      const d=JSON.parse(e.data);
+      switch(d.type){
+        case 'planner_start':setAgent('planner',{status:'working',message:'Let me break this down...',pos:'desk'});addEvent(`Atlas planning "${d.company}"...`,'planner');break;
+        case 'planner_done':setAgent('planner',{status:'done',message:`${d.angles.length} angles ready!`,pos:'desk'});addEvent(`Atlas found ${d.angles.length} angles`,'planner');
+          d.angles.forEach(a=>addEvent(`  → ${a.topic}`,'planner'));
+          ['pricing','features','sentiment','positioning'].forEach((w,i)=>setTimeout(()=>sendPacket('planner',w),i*150));break;
+        case 'worker_start':{const w=TOPIC_MAP[d.topic];if(!w)break;
+          setAgent(w,{status:d.is_redo?'redo':'working',message:d.is_redo?'Redoing this...':'Searching...',pos:'meeting'});
+          addEvent(`${AGENTS[w].name} ${d.is_redo?'retrying':'researching'}: ${d.topic}`,'worker');break;}
+        case 'worker_done':{const w=TOPIC_MAP[d.topic];if(!w)break;
+          setAgent(w,{status:'done',message:`${d.sources_count} sources!`,pos:'desk'});
+          addEvent(`${AGENTS[w].name} done — ${d.sources_count} sources`,'worker');sendPacket(w,'critic');break;}
+        case 'critic_start':setAgent('critic',{status:'working',message:`Reviewing round ${d.round}...`,pos:'meeting'});addEvent(`Quinn reviewing (round ${d.round})...`,'critic');break;
+        case 'critic_verdict':{const i=d.verdict==='pass'?'✓':'✗';addEvent(`Quinn: ${i} ${d.topic} ${d.verdict.toUpperCase()}${d.reason?' — '+d.reason:''}`,'critic');
+          if(d.verdict==='redo'){const w=TOPIC_MAP[d.topic];if(w){setAgent(w,{status:'redo',message:'Flagged!',pos:'desk'});sendPacket('critic',w)}}break;}
+        case 'critic_done':
+          if(d.flagged.length>0){setAgent('critic',{status:'done',message:`${d.flagged.length} flagged`,pos:'desk'});addEvent(`Quinn flagged ${d.flagged.length}`,'critic')}
+          else{setAgent('critic',{status:'done',message:'All passed ✓',pos:'desk'});addEvent('Quinn: All passed!','critic');sendPacket('critic','synthesizer')}break;
+        case 'synthesizer_start':setAgent('synthesizer',{status:'working',message:'Writing report...',pos:'desk'});addEvent('Aria writing report...','synth');break;
+        case 'synthesizer_done':setAgent('synthesizer',{status:'done',message:'Report done!',pos:'desk'});addEvent(`Aria done — ${d.report_length.toLocaleString()} chars`,'synth');break;
+        case 'complete':setReport(d.report);clearInterval(timerRef.current);setRunning(false);setTab('report');
+          setTimeout(()=>{Object.keys(AGENTS).forEach(id=>setAgent(id,{status:'idle',message:'',pos:'desk'}))},3000);
+          addEvent(`Complete! ${d.findings_count} findings, ${d.retry_count} round(s)`,'system');es.close();break;
+        case 'error':clearInterval(timerRef.current);setRunning(false);addEvent(`Error: ${d.message}`,'error');es.close();break;
+      }};
+    es.onerror=()=>{clearInterval(timerRef.current);setRunning(false);addEvent('Connection lost','error');es.close()};
+  },[company,running,addEvent,setAgent,sendPacket]);
+
+  const fmt=s=>`${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+  return(<>
+    <div className="header"><div className="logo"><em>●</em>ScopeOut<span>Mission Control</span></div>
+      <input value={company} onChange={e=>setCompany(e.target.value)} onKeyDown={e=>e.key==='Enter'&&start()} placeholder="Company..." disabled={running}/>
+      <button className="btn" onClick={start} disabled={running||!company.trim()}>{running?'Analyzing...':'Analyze'}</button>
+      {running&&<div className="timer">⏱ {fmt(elapsed)}</div>}</div>
+    <div className="main">
+      <Office agents={agents} packets={packets}/>
+      <div className="right-panel"><div className="tabs"><div className={`tab${tab==='feed'?' active':''}`} onClick={()=>setTab('feed')}>Activity</div><div className={`tab${tab==='report'?' active':''}`} onClick={()=>setTab('report')}>Report</div></div>
+        <div className="tab-body">{tab==='feed'&&<Feed events={events}/>}{tab==='report'&&(report?<div className="tab-page report-area" dangerouslySetInnerHTML={{__html:md(report)}}/>:<div className="tab-page report-empty">Report appears after analysis.</div>)}</div></div>
+    </div></>);
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
