@@ -4,8 +4,7 @@
 
 ScopeOut is a multi-agent system built with **LangGraph** that produces sourced competitive teardown reports. Type a company name, and a team of specialized AI agents collaborates in real time: planning research angles, searching the web in parallel, critiquing quality, and synthesizing a polished report — all visible in a pixel-art office where you can watch them work.
 
-https://github.com/user-attachments/assets/YOUR_VIDEO_ID
-
+[![Watch the demo](https://img.youtube.com/vi/yUvD6YIInpA/maxresdefault.jpg)](https://www.youtube.com/watch?v=yUvD6YIInpA)
 ---
 
 ## Architecture
