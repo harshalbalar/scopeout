@@ -30,6 +30,7 @@ def main():
         "retry_count": 0,
         "flagged_topics": [],
         "critique": [],
+        "search_results": {},
     })
 
     # ── Summary ───────────────────────────────────────────

@@ -1,68 +1,45 @@
 """
-ScopeOut — Graph Definition (Phase 4)
-======================================
-Fan-out pipeline with a critic quality loop:
+ScopeOut — Graph Definition (Optimized)
+=========================================
+Optimized flow:
+  START → planner → batch_search → [analyze_workers × 4] → critic → synthesizer → END
+                                                               ↕
+                                                        [research_worker redo]
 
-  START -> planner -> [workers] -> critic -> synthesizer -> END
-                         ^           |
-                         |___redo____|
-
-The conditional edge after the critic either:
-  - Routes to synthesizer (all findings pass, or max retries reached)
-  - Sends flagged angles back to workers for a redo via Send()
-
-Max 1 redo round to prevent infinite loops.
+batch_search fires all Tavily searches concurrently in one node.
+analyze_workers do Gemini analysis only (reading pre-fetched results).
+research_worker handles redos (full search + analyze).
+synthesizer streams tokens to the browser.
 """
-
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
-
-from nodes import critic, planner, research_worker, synthesizer
+from nodes import planner, batch_search, analyze_worker, research_worker, critic, synthesizer
 from state import ScopeOutState
 
 
-# ── Routing Functions ───────────────────────────────────────────────
-
-
-def route_to_workers(state: ScopeOutState) -> list[Send]:
-    """
-    Fan-out: dispatch one parallel worker per research angle.
-    Called after the planner finishes.
-    """
+def route_to_analyzers(state: ScopeOutState) -> list[Send]:
+    """Fan out: one analyze_worker per angle, with pre-fetched search results."""
+    search_results = state.get("search_results", {})
     return [
-        Send("research_worker", {
+        Send("analyze_worker", {
             "company": state["company"],
             "angle": angle,
+            "search_hits": search_results.get(angle.topic, []),
         })
         for angle in state["angles"]
     ]
 
 
 def route_after_critic(state: ScopeOutState) -> list[Send] | str:
-    """
-    Decide what happens after the critic reviews findings.
-
-    If all pass (or we've hit the retry cap): proceed to synthesizer.
-    If some are flagged: send ONLY those angles back to workers,
-    with the critic's specific feedback so the worker knows what
-    to improve.
-    """
     flagged = state.get("flagged_topics", [])
     retry_count = state.get("retry_count", 0)
-
-    # Accept what we have if all pass or we've already retried once
     if not flagged or retry_count >= 2:
         return "synthesizer"
-
-    # Build per-topic feedback from the critique
     critique = state.get("critique", [])
     feedback_by_topic = {
         item["topic"]: item.get("reason", "Needs improvement")
-        for item in critique
-        if item.get("verdict") == "redo"
+        for item in critique if item.get("verdict") == "redo"
     }
-
-    # Send only the flagged angles back — unflagged findings stay as-is
     return [
         Send("research_worker", {
             "company": state["company"],
@@ -74,36 +51,22 @@ def route_after_critic(state: ScopeOutState) -> list[Send] | str:
     ]
 
 
-# ── Graph Construction ──────────────────────────────────────────────
-
-
 def build_graph():
-    """Build and compile the ScopeOut graph with parallel workers + critic loop."""
-
     workflow = StateGraph(ScopeOutState)
 
-    # ── Add nodes ───────────────────────────────────────
     workflow.add_node("planner", planner)
-    workflow.add_node("research_worker", research_worker)
+    workflow.add_node("batch_search", batch_search)
+    workflow.add_node("analyze_worker", analyze_worker)
+    workflow.add_node("research_worker", research_worker)  # for redos
     workflow.add_node("critic", critic)
     workflow.add_node("synthesizer", synthesizer)
 
-    # ── Wire edges ──────────────────────────────────────
     workflow.add_edge(START, "planner")
-
-    # Planner fans out to parallel workers
-    workflow.add_conditional_edges("planner", route_to_workers, ["research_worker"])
-
-    # Workers converge into the critic
+    workflow.add_edge("planner", "batch_search")
+    workflow.add_conditional_edges("batch_search", route_to_analyzers, ["analyze_worker"])
+    workflow.add_edge("analyze_worker", "critic")
+    workflow.add_conditional_edges("critic", route_after_critic, ["synthesizer", "research_worker"])
     workflow.add_edge("research_worker", "critic")
-
-    # Critic either approves (-> synthesizer) or flags (-> workers redo)
-    workflow.add_conditional_edges(
-        "critic",
-        route_after_critic,
-        ["synthesizer", "research_worker"],
-    )
-
     workflow.add_edge("synthesizer", END)
 
     return workflow.compile()

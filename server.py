@@ -9,10 +9,8 @@ Start with:
 
 Then open http://localhost:8000 in your browser.
 """
-
 from dotenv import load_dotenv
 load_dotenv()
-
 import asyncio
 import json
 import threading
@@ -57,6 +55,7 @@ async def analyze(company: str):
                 "retry_count": 0,
                 "flagged_topics": [],
                 "critique": [],
+                "search_results": {},
             })
             bus.emit(
                 "complete",

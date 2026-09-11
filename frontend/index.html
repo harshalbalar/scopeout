@@ -301,6 +301,7 @@ function App(){
           else{setAgent('critic',{status:'done',message:'All passed ✓',pos:'desk'});addEvent('Quinn: All passed!','critic');sendPacket('critic','synthesizer')}break;
         case 'synthesizer_start':setAgent('synthesizer',{status:'working',message:'Writing report...',pos:'desk'});addEvent('Aria writing report...','synth');break;
         case 'synthesizer_done':setAgent('synthesizer',{status:'done',message:'Report done!',pos:'desk'});addEvent(`Aria done — ${d.report_length.toLocaleString()} chars`,'synth');break;
+        case 'report_chunk':setReport(prev=>prev+d.text);setTab('report');break;
         case 'complete':setReport(d.report);clearInterval(timerRef.current);setRunning(false);setTab('report');
           setTimeout(()=>{Object.keys(AGENTS).forEach(id=>setAgent(id,{status:'idle',message:'',pos:'desk'}))},3000);
           addEvent(`Complete! ${d.findings_count} findings, ${d.retry_count} round(s)`,'system');es.close();break;
